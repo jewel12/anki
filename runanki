@@ -1,4 +1,57 @@
 #!/usr/bin/env python3
 
-import aqt
-aqt.run()
+import io
+import pickle
+import json
+import logging
+import traceback
+import sys
+from anki.storage import Collection
+from anki.sync import Syncer, RemoteServer
+from anki.db import DB
+
+logging.basicConfig(level=logging.INFO)
+
+try:
+    logging.debug("Starting...")
+    db = DB('/root/.local/share/Anki2/prefs21.db')
+    u, blob = db.first("select * from profiles where name = 'ユーザー 1';")
+
+    def _unpickle(data):
+        class Unpickler(pickle.Unpickler):
+            def find_class(self, module, name):
+                if module == "PyQt5.sip":
+                    try:
+                        import PyQt5.sip # pylint: disable=unused-import
+                    except:
+                        # use old sip location
+                        module = "sip"
+                fn = super().find_class(module, name)
+                if module == "sip" and name == "_unpickle_type":
+                    def wrapper(mod, obj, args):
+                        if mod.startswith("PyQt4") and obj == "QByteArray":
+                            # can't trust str objects from python 2
+                            return QByteArray()
+                        return fn(mod, obj, args)
+                    return wrapper
+                else:
+                    return fn
+        up = Unpickler(io.BytesIO(data), errors="ignore")
+        return up.load()
+
+    pickled = _unpickle(blob)
+    server = RemoteServer(pickled['syncKey'], hostNum=pickled['hostNum'])
+    col = Collection('/root/.local/share/Anki2/ユーザー 1/collection.anki2', log=True)
+    client = Syncer(col, server)
+    logging.debug(client.sync())
+    cards, thetime = col.db.first("""
+    select count(), sum(time)/1000
+    from revlog where id > ? """, (col.sched.dayCutoff-86400)*1000)
+
+    if (cards is None) or (thetime is None):
+        print(json.dumps({"cards": 0, "time": 0}))
+    else:
+        print(json.dumps({"cards": cards, "time": thetime}))
+except:
+    t, v, tb = sys.exc_info()
+    logging.fatal(traceback.format_exc())
