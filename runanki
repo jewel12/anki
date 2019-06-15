@@ -44,14 +44,35 @@ try:
     col = Collection('/root/.local/share/Anki2/ユーザー 1/collection.anki2', log=True)
     client = Syncer(col, server)
     logging.debug(client.sync())
-    cards, thetime = col.db.first("""
-    select count(), sum(time)/1000
-    from revlog where id > ? """, (col.sched.dayCutoff-86400)*1000)
 
-    if (cards is None) or (thetime is None):
-        print(json.dumps({"cards": 0, "time": 0}))
-    else:
-        print(json.dumps({"cards": cards, "time": thetime}))
+    revs = col.db.all("""
+    select
+      deck, COUNT(1) cards, sum(t) time
+    from (
+    select
+      c.did deck, r.cid, sum(time)/1000 t
+    from revlog r
+    join cards c on c.id = r.cid
+    where r.id > ?
+    group by c.did, r.cid
+    ) group by deck
+    """, (col.sched.dayCutoff-86400)*1000)
+
+    did_mapping = {
+        1546134935625: u"語彙A",
+        1557157043654: u"語彙B",
+        1546779203100: u"英作文",
+        1557836568460: u"精読A",
+    }
+
+    res = []
+    for v in revs:
+        deck = did_mapping.get(v[0], None)
+        if deck is None:
+            continue
+        res.append({'deck': deck, 'cards': v[1], 'time': v[2]})
+
+    print(json.dumps(res, ensure_ascii=False))
 except:
     t, v, tb = sys.exc_info()
     logging.fatal(traceback.format_exc())
